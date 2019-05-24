@@ -8,12 +8,8 @@ from pymongo import MongoClient
 from collections import Counter
 
 class User():
-    def __init__(self, id, first_name, last_name, is_closed, sex, info, weight = 0):
+    def __init__(self, id, info, weight = 0):
         self.id = id
-        self.first_name = first_name
-        self.last_name = last_name
-        self.is_closed = is_closed
-        self.sex = sex
         self.info = info
         self.weight = weight
 
@@ -31,20 +27,13 @@ class Vkinder():
 
         self.RESULT_DB = database
         main_user_info = response_main_user.json()['response'][0]
-        self.main_user = User(
-            main_user_info.pop('id'),
-            main_user_info.pop('first_name'),
-            main_user_info.pop('last_name'),
-            main_user_info.pop('is_closed'),
-            main_user_info.pop('sex'),
-            main_user_info
-        )
+        self.main_user = User(main_user_info.pop('id'), main_user_info)
 
     def find_users(self):
         sex_for_find = 0
-        if self.main_user.sex == 1:
+        if self.main_user.info['sex'] == 1:
             sex_for_find = 2
-        elif self.main_user.sex == 2:
+        elif self.main_user.info['sex'] == 2:
             sex_for_find = 1
 
         min_age = 18
@@ -69,68 +58,44 @@ class Vkinder():
         response_find_users = requests.get('https://api.vk.com/method/users.search', params_for_find)
         users = []
         for user in response_find_users.json()['response']['items']:
-            users.append(User(
-                user.pop('id'),
-                user.pop('first_name'),
-                user.pop('last_name'),
-                user.pop('is_closed'),
-                user.pop('sex'),
-                user
-            ))
+            users.append(User(user.pop('id'), user))
         return users
 
+    def count_weight(self, users, field, multiplier):
+        if self.main_user.info[field] != '':
+            splitted_main_user_interests = self.main_user.info[field].split(' ')
+            for user in users:
+                counter = 0
+                if field in user.info:
+                    splitted_interests = user.info[field].split(' ')
+                    word_counter = Counter(splitted_interests)
+                    for interest in splitted_main_user_interests:
+                        counter += word_counter[interest]
+                user.weight += counter * multiplier
+
     def sort_users(self, finded_users):
-        if self.main_user.info['interests'] != '':
-            splitted_main_user_interests = self.main_user.info['interests'].split(' ')
-            for user in finded_users:
-                counter = 0
-                if 'interests' in user.info:
-                    splitted_interests = user.info['interests'].split(' ')
-                    word_counter = Counter(splitted_interests)
-                    for interest in splitted_main_user_interests:
-                        counter += word_counter[interest]
-                user.weight += counter * 3
+        self.count_weight(finded_users, 'interests', 3)
+        self.count_weight(finded_users, 'music', 2)
+        self.count_weight(finded_users, 'books', 1)
 
-        if self.main_user.info['music'] != '':
-            splitted_main_user_interests = self.main_user.info['music'].split(' ')
-            for user in finded_users:
-                counter = 0
-                if 'music' in user.info:
-                    splitted_interests = user.info['music'].split(' ')
-                    word_counter = Counter(splitted_interests)
-                    for interest in splitted_main_user_interests:
-                        counter += word_counter[interest]
-                user.weight += counter * 2
-
-        if self.main_user.info['books'] != '':
-            splitted_main_user_interests = self.main_user.info['books'].split(' ')
-            for user in finded_users:
-                counter = 0
-                if 'books' in user.info:
-                    splitted_interests = user.info['books'].split(' ')
-                    word_counter = Counter(splitted_interests)
-                    for interest in splitted_main_user_interests:
-                        counter += word_counter[interest]
-                user.weight += counter
-
-            finded_users.sort(key=lambda dict: dict.weight, reverse=True)
+        finded_users.sort(key=lambda dict: dict.weight, reverse=True)
 
         old_users = self.RESULT_DB.result.find({'main_user_id': self.main_user.id})
         try:
             old_users[0]
             for old_user in old_users[0]['finded_users']:
                 for user in finded_users:
-                    if user.id == old_user or user.is_closed:
+                    if user.id == old_user or user.info['is_closed']:
                         finded_users.remove(user)
         except IndexError:
             for user in finded_users:
-                if user.is_closed:
+                if user.info['is_closed']:
                     finded_users.remove(user)
 
         return finded_users[0:10]
 
     def find_and_sort_photos(self, finded_users):
-        unsorted_photos = []
+        sorted_users = []
         for user in finded_users:
             params = {
                 'access_token': self.TOKEN,
@@ -140,17 +105,12 @@ class Vkinder():
                 'v': self.VERSION
             }
             response_get_photos = requests.get('https://api.vk.com/method/photos.get', params)
-            unsorted_photos.append({
+            unsorted_photos = {
                 'id': user.id,
                 'photos': response_get_photos.json()['response']['items']
-            })
-            time.sleep(0.4)
-            print('.')
-
-        sorted_users = []
-        for user in unsorted_photos:
+            }
             unsorted_ids_of_photos = []
-            for photo in user['photos']:
+            for photo in unsorted_photos['photos']:
                 unsorted_ids_of_photos.append({
                     'id': photo['id'],
                     'likes': photo['likes']['count']
@@ -158,9 +118,11 @@ class Vkinder():
             unsorted_ids_of_photos.sort(key=lambda dict: dict['likes'], reverse=True)
             unsorted_ids_of_photos = unsorted_ids_of_photos[0:3]
             sorted_users.append({
-                'id': user['id'],
+                'id': unsorted_photos['id'],
                 'photos': unsorted_ids_of_photos
             })
+            time.sleep(0.33)
+            print('.')
         return sorted_users
 
     def write_to_db(self, file):
